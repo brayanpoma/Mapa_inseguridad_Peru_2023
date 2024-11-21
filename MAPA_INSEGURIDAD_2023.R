@@ -37,6 +37,7 @@ df_2023<-read_sav(paste0(getwd(),"/",año,"/","CAP_600_URBANO_7.sav"))
 
 #### Limpieza de datos ####
 
+#El archivo SPSS tiene atriburos, los eliminamos para mejor trabajo.
 df_2023[]<-lapply(df_2023, FUN = function(x){
   attributes(x)<-NULL
   x
@@ -69,36 +70,43 @@ df_2023[]<-lapply(df_2023, FUN = function(x){
 #P601_11: INTENTO DE SECUESTRO: 1:Sí, 2:No, 3:No tiene
 #P601_12A: INTENTO DE EXTORSION: 1:Sí, 2:No, 3:No tiene
 
+#Se aprecia que todas las variables de interes (Hechos delictivos) inician con P601.
 variables<-df_2023 |> 
   select(starts_with("P601")) |> 
   names()
-  
+
+#Seleccionamos la variable de interes y el nombre de los departamentos
 df_2023<-df_2023 |> 
   select(starts_with("P601"),NOMBREDD)
+
+#Existen valores vacios, los convertimos en NA
 glimpse(df_2023)
-df_2023[df_2023==""]<-NA
+df_2023[df_2023==""]<-NA 
 
 miss_var_summary(df_2023)
 miss_var_table(df_2023)
 
+#Creamos una funcion para eliminar las variables que cuentan con mayor del 10% de missing values
 filtrar_var<-function(df){
   var_prop_na<-(colSums(is.na(df))/nrow(df))*100
   df<-df |> 
     select(-names(var_prop_na[var_prop_na>10]))
 }
-
 df_2023<-filtrar_var(df_2023)
 
+#Observamos las caracteristicas de nuestros missing values
 miss_var_summary(df_2023)
 miss_var_table(df_2023)
 gg_miss_var(df_2023)
 gg_miss_case(df_2023)
 
+#Los graficos y tablas nos indican simultaneidad de missing values en las filas y columas
 df_2023<-na.omit(df_2023)
 glimpse(df_2023)
 
 #### Transformación de datos ####
 
+#Creamos un nuevo dataframe con la proporción de casos de víctimas de alguno de los hechos delictivos
 inseguridad_dptos<-df_2023 |> 
   mutate(victima=as.integer(rowSums(df_2023[variables]==1)>0)) |> 
   group_by(NOMBREDD) |> 
@@ -106,18 +114,19 @@ inseguridad_dptos<-df_2023 |>
             vic=sum(victima)) |> 
   mutate(prop=(vic/N)*100)
 
-
+#Creamos el dataframe de departamentos gracias a la libreria rnaturalearth 
 departamentos <- ne_states(country = "Peru", returnclass = "sf")
 departamentos$name
+
+#Eliminamos lima provincia porque es lo que no tenemos en nuestro dataframe de inseguridad dptos.
 departamentos<-departamentos |> 
   filter(name!="Lima Province")
 
+#Uniformizamos los nombres de los departamentos para poder empatar los dos dataframes.
 nombres_dptos<-sort(departamentos$name)
 inseguridad_dptos$NOMBREDD<-nombres_dptos
 mapa_delincuencia <- departamentos |> 
   left_join(inseguridad_dptos, by = c("name" = "NOMBREDD"))
-
-
 
 #### VISUALIZACION ####
 
