@@ -13,3 +13,4 @@
 - gridExtra     - Unir gráficos
 - grid          - Paquete de gráficos
 - haven         - Lectura de archivos sav o dta
+- survey        - Para muestras
