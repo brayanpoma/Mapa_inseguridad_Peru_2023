@@ -3,7 +3,7 @@
 #Configuraciones iniciales.
 rm(list=ls())
 dev.off()
-setwd("D:/PROYECTOS/Delincuencia/Mapa_inseguridad")
+setwd("D:/PROYECTOS/Delincuencia") #Configura tu ruta
 getwd()
 list.files()
 
@@ -14,11 +14,13 @@ library(rnaturalearth)  #Maps
 library(gridExtra)      #Join graphs
 library(grid)           #Join graphs
 library(haven)          #SPSS files      
+library(survey)         #samples
 
 #### Extracción de datos. ####
 link<-"https://proyectos.inei.gob.pe/iinei/srienaho/descarga/SPSS/903-Modulo1819.zip"
 año<-"2023"
 
+# Elaborando funcion para descargar datos
 descarga<-function(link,año){
   nombrezip<-gsub(".+SPSS/","",link)
   nombrecarpeta<-gsub("[.]zip","",nombrezip)
@@ -32,18 +34,21 @@ descarga<-function(link,año){
   }
 }
 
+# Descargando datos
 descarga(link,año)
+
+# Cargando datos
 df_2023<-read_sav(paste0(getwd(),"/",año,"/","CAP_600_URBANO_7.sav"))
 
 #### Limpieza de datos ####
 
-#El archivo SPSS tiene atriburos, los eliminamos para mejor trabajo.
+# Eliminando los atributos - Quedarnos con la base de datos
 df_2023[]<-lapply(df_2023, FUN = function(x){
   attributes(x)<-NULL
   x
 })
 
-#Seleccionamos los hechos delictivos que atentan contra la seguridad de la población
+# Seleccionamos los hechos delictivos que atentan contra la seguridad de la población
 
 #P601_1:  ROBO DE VEHICULO AUTOMOTOR - AUTO,CAMIONETA: 1:Sí, 2:No, 3:No tiene
 #P601_3A: ROBO DE AUTOPARTES: 1:Sí, 2:No, 3:No tiene
@@ -70,73 +75,67 @@ df_2023[]<-lapply(df_2023, FUN = function(x){
 #P601_11: INTENTO DE SECUESTRO: 1:Sí, 2:No, 3:No tiene
 #P601_12A: INTENTO DE EXTORSION: 1:Sí, 2:No, 3:No tiene
 
-#Se aprecia que todas las variables de interes (Hechos delictivos) inician con P601.
-variables<-df_2023 |> 
-  select(starts_with("P601")) |> 
-  names()
 
-#Seleccionamos la variable de interes y el nombre de los departamentos
+# Obteniendo columnas de interes
 df_2023<-df_2023 |> 
-  select(starts_with("P601"),NOMBREDD)
+  select(starts_with("P601"),CCDD,NOMBREDD,CONGLOMERADO,ESTRATO,FACTOR)
 
-#Existen valores vacios, los convertimos en NA
-glimpse(df_2023)
-df_2023[df_2023==""]<-NA 
+# Transformamos los vacios en NA
+df_2023[df_2023==""]<-NA
 
-miss_var_summary(df_2023)
-miss_var_table(df_2023)
-
-#Creamos una funcion para eliminar las variables que cuentan con mayor del 10% de missing values
+# Función para filtrar a columnas con valores nulos menores al 10%
 filtrar_var<-function(df){
   var_prop_na<-(colSums(is.na(df))/nrow(df))*100
   df<-df |> 
     select(-names(var_prop_na[var_prop_na>10]))
 }
+
+# Filtramos columnas
 df_2023<-filtrar_var(df_2023)
 
-#Observamos las caracteristicas de nuestros missing values
-miss_var_summary(df_2023)
-miss_var_table(df_2023)
-gg_miss_var(df_2023)
-gg_miss_case(df_2023)
-
-#Los graficos y tablas nos indican simultaneidad de missing values en las filas y columas
+# Eliminando los valores nulos
 df_2023<-na.omit(df_2023)
-glimpse(df_2023)
+
+# Obteniendo el nombre de las variables de interes
+variables<-df_2023 |> 
+  select(starts_with("P601")) |> 
+  names()
 
 #### Transformación de datos ####
 
-#Creamos un nuevo dataframe con la proporción de casos de víctimas de alguno de los hechos delictivos
-inseguridad_dptos<-df_2023 |> 
-  mutate(victima=as.integer(rowSums(df_2023[variables]==1)>0)) |> 
-  group_by(NOMBREDD) |> 
-  summarise(N=n(),
-            vic=sum(victima)) |> 
-  mutate(prop=(vic/N)*100)
+# Calculando victimas de algun delito
+df_2023<-df_2023 |> 
+  mutate(victima=as.integer(rowSums(df_2023[variables]==1,na.rm=T)>0,na.rm=T))
 
-#Creamos el dataframe de departamentos gracias a la libreria rnaturalearth 
+# Adecuando la muestra
+muestra <- svydesign(id = ~CONGLOMERADO, strata = ~ESTRATO, weights = ~FACTOR, data = df_2023)
+
+# Calculando estadistica agrupado por departamentos
+inseguridad_dptos<-svyby(~victima, ~NOMBREDD, muestra, svymean, na.rm = TRUE)
+inseguridad_dptos$victima<-inseguridad_dptos$victima *100
+
+# Cargando el paquete para elaborar el mapa a nivel departamental.
 departamentos <- ne_states(country = "Peru", returnclass = "sf")
-departamentos$name
 
-#Eliminamos lima provincia porque es lo que no tenemos en nuestro dataframe de inseguridad dptos.
+# Elimnando lima provincia
 departamentos<-departamentos |> 
   filter(name!="Lima Province")
 
-#Uniformizamos los nombres de los departamentos para poder empatar los dos dataframes.
-nombres_dptos<-sort(departamentos$name)
-inseguridad_dptos$NOMBREDD<-nombres_dptos
+# Buscar un identificador para concatenar ambos datos
+nombres_dptos<-sort(departamentos$name) 
+inseguridad_dptos$NOMBREDD<-nombres_dptos 
 mapa_delincuencia <- departamentos |> 
   left_join(inseguridad_dptos, by = c("name" = "NOMBREDD"))
 
 #### VISUALIZACION ####
 
 barra<-inseguridad_dptos |> 
-  ggplot(aes(x=fct_reorder(NOMBREDD,prop),y=prop))+
-  geom_bar(stat = "identity",aes(fill = prop))+
+  ggplot(aes(x=fct_reorder(NOMBREDD,victima),y=victima))+
+  geom_bar(stat = "identity",aes(fill = victima))+
   coord_flip()+
   theme_classic()+
   scale_fill_gradient(low = "#f3cec3", high = "#d30324",guide = "none")+
-  geom_text(aes(label = sprintf("%.1f", prop)),
+  geom_text(aes(label = sprintf("%.1f", victima)),
             hjust=1.5,
             size=3.5)+
   theme(axis.line = element_blank(),
@@ -146,7 +145,7 @@ barra<-inseguridad_dptos |>
         axis.text.y = element_text(color = "black"))
 
 mapa<-ggplot(mapa_delincuencia) +
-  geom_sf(aes(fill = prop), color = "white") +
+  geom_sf(aes(fill = victima), color = "white") +
   scale_fill_gradient(low = "#f3cec3", high = "#d30324", guide = "none") +
   theme_classic()+
   geom_sf_text(aes(label =name),
@@ -157,12 +156,11 @@ mapa<-ggplot(mapa_delincuencia) +
   ylab("")+
   xlab("")
 
-
 # Uniendo los graficos.
+Mapa_1<-grid.arrange(mapa, barra, ncol = 2, widths = c(2, 1))
 
-Mapa3<-grid.arrange(mapa, barra, ncol = 2, widths = c(2, 1))
-
-Mapa3 <- grid.arrange(
+# Agregando titulos
+Mapa_1 <- grid.arrange(
   top = arrangeGrob( #inseguridad
     textGrob("MAPA DE INSEGURIDAD - PERÚ 2023", gp = gpar(fontsize = 15,fontface = "bold"),
              vjust =1 ),
@@ -173,6 +171,5 @@ Mapa3 <- grid.arrange(
                     gp = gpar(fontsize = 10)),
   mapa, barra, ncol = 2, widths = c(2, 1)
 )
-
 
 
